@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 /**
  * ImageClient
  */
-@FeignClient("images-service")
+@FeignClient("image-service")
 public interface ImageClient {
 
     @PostMapping("/images/{upc}")

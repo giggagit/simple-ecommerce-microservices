@@ -17,9 +17,7 @@ public interface ImageService {
 
     public void save(Image image);
 
-    public void delete(Image image);
-
-    public void deleteById(long ImageId);
+    public void delete(Image image, List<Image> images);
 
     public void deleteByUpc(long upc);
 
@@ -29,9 +27,13 @@ public interface ImageService {
 
     public List<Image> findByUpc(long upc);
 
-    public Image imageUpload(Image image, MultipartFile file);
+    public Image imageUpload(Image image, List<Image> images, MultipartFile file);
 
     public Resource imageDownload(long upc, String name);
+
+    public void deleteImage(Image image);
+
+    public void deleteDirectory(long upc);
 
     public boolean isProduct(long upc);
 

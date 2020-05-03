@@ -9,10 +9,13 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import com.giggagit.image.Client.CategoryClient;
 import com.giggagit.image.Exception.ImageException;
@@ -24,7 +27,6 @@ import com.giggagit.image.Model.Type;
 import com.giggagit.image.Properties.StorageProperties;
 import com.giggagit.image.Repository.ImageRepository;
 
-import org.apache.commons.io.FilenameUtils;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.data.domain.Page;
@@ -57,18 +59,21 @@ public class ImageServiceImpl implements ImageService {
     }
 
     @Override
-    public void delete(Image image) {
-        imageRepository.delete(image);
-    }
+    @Transactional
+    public void delete(Image image, List<Image> images) {
+        if (images.size() > 1) {
+            deleteImage(image);
+        } else {
+            deleteDirectory(image.getProduct().getUpc());
+        }
 
-    @Override
-    public void deleteById(long ImageId) {
-        imageRepository.deleteById(ImageId);
+        imageRepository.delete(image);
     }
 
     @Override
     @Transactional
     public void deleteByUpc(long upc) {
+        deleteDirectory(upc);
         imageRepository.deleteByProductUpc(upc);
     }
 
@@ -89,24 +94,34 @@ public class ImageServiceImpl implements ImageService {
 
     @Override
     @Transactional
-    public Image imageUpload(Image image, MultipartFile file) {
+    public Image imageUpload(Image image, List<Image> images, MultipartFile file) {
 
         if (file.isEmpty()) {
             throw new StorageException("Failed to store empty file.");
         }
 
-        // Validate product UPC
-        ResponseEntity<Product> productResponse = categoryClient.getProduct(image.getProduct().getUpc());
+        String fileExtension = "";
+        String originalFilename = file.getOriginalFilename();
 
-        if (productResponse.getStatusCode().isError()) {
-            throw new ProductNotFoundException("Product UPC not found!, UPC: " + image.getProduct().getUpc());
+        // Validate file extension
+        if (originalFilename.lastIndexOf(".") != -1 && originalFilename.lastIndexOf(".") != 0) {
+            fileExtension = originalFilename.substring(originalFilename.lastIndexOf('.'));
+        } else {
+            throw new StorageException("Can not store file without extension.");
+        }
+
+        // Validate product UPC
+        if (images.isEmpty()) {
+            ResponseEntity<Product> productResponse = categoryClient.getProduct(image.getProduct().getUpc());
+
+            if (productResponse.getStatusCode().isError()) {
+                throw new ProductNotFoundException("Product UPC not found!, UPC: " + image.getProduct().getUpc());
+            }
         }
 
         // Generate image's name
-        String imageName = null;
-        String fileExtension = "." + FilenameUtils.getExtension(file.getOriginalFilename());
+        String imageName = "";
         String upc = image.getProduct().getUpc().toString();
-        List<Image> images = findByUpc(image.getProduct().getUpc());
 
         // Count type for images runing number
         if (image.getType().equals(Type.COVER)) {
@@ -120,22 +135,17 @@ public class ImageServiceImpl implements ImageService {
 
             imageName = upc + "_cover" + fileExtension;
         } else {
-            long optionalImage = images.stream().filter(type -> type.getType().equals(Type.OPTIONAL)).count();
+            long countType = images.stream().filter(type -> type.getType().equals(Type.OPTIONAL)).count();
             String result = "01";
 
-            if (optionalImage > 0L) {
+            if (countType > 0L) {
                 // Get optional image number
                 String regex = "[0-9]{2}(?=\\.)";
                 List<Integer> imagenNumbers = new ArrayList<>();
                 Pattern pattern = Pattern.compile(regex);
 
-                for (Image imageList : images) {
-                    Matcher matcher = pattern.matcher(imageList.getUrl());
-
-                    while (matcher.find()) {
-                        imagenNumbers.add(Integer.parseInt(matcher.group(0)));
-                    }
-                }
+                images.stream().map(i -> pattern.matcher(i.getUrl())).filter(Matcher::find).map(m -> m.group())
+                        .forEach(s -> imagenNumbers.add(Integer.parseInt(s)));
 
                 // Find the first missing number
                 BitSet bitSet = new BitSet();
@@ -146,28 +156,37 @@ public class ImageServiceImpl implements ImageService {
             imageName = upc + "_optional_" + result + fileExtension;
         }
 
+        Path directory = null;
+
         try {
-            Path directory = Files.createDirectories(Paths.get(storageProperties.getUploadDir() + upc));
+            directory = Files.createDirectories(Paths.get(storageProperties.getUploadDir() + upc));
 
             try (InputStream inputStream = file.getInputStream()) {
                 // Copy image to storage
                 Path path = Paths.get(directory + "/" + imageName);
                 Files.copy(inputStream, path, StandardCopyOption.REPLACE_EXISTING);
-
-                // Delete old image if file extension is differnt
-                String oldImage = FilenameUtils.getName(image.getUrl());
-                if (image.getUrl() != null && !imageName.equals(oldImage)) {
-                    Path oldPath = Paths.get(directory + "/" + oldImage);
-                    Files.delete(oldPath);
-                }
             }
-
-            image.setUrl("/images/storage/" + image.getProduct().getUpc() + "/" + imageName);
-            save(image);
         } catch (IOException e) {
             e.printStackTrace();
         }
 
+        // Delete old image if file name is differnt
+        if (image.getUrl() != null) {
+            String oldImage = image.getUrl().substring(image.getUrl().lastIndexOf('/') + 1, image.getUrl().length());
+
+            if (!imageName.equals(oldImage)) {
+                Path oldPath = Paths.get(directory + "/" + oldImage);
+
+                try {
+                    Files.delete(oldPath);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        image.setUrl("/images/storage/" + image.getProduct().getUpc() + "/" + imageName);
+        save(image);
         return image;
     }
 
@@ -183,6 +202,32 @@ public class ImageServiceImpl implements ImageService {
         }
 
         return resource;
+    }
+
+    @Override
+    public void deleteImage(Image image) {
+        String fileName = image.getUrl().substring(image.getUrl().lastIndexOf('/') + 1, image.getUrl().length());
+        String directory = storageProperties.getUploadDir() + image.getProduct().getUpc();
+        Path file = Paths.get(directory + "/" + fileName);
+
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void deleteDirectory(long upc) {
+        try (Stream<Path> paths = Files.walk(Paths.get(storageProperties.getUploadDir() + upc))) {
+            List<Path> deletePaths = paths.sorted(Comparator.reverseOrder()).collect(Collectors.toList());
+
+            for (Path path : deletePaths) {
+                Files.deleteIfExists(path);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     @Override

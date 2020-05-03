@@ -54,13 +54,13 @@ public class ImageController {
 
     @PostMapping
     public ResponseEntity<?> postImage(@NotNull @RequestPart MultipartFile file, @Validated @RequestPart Image image) {
-
-        image.setUrl(null);
-        Image imageData = imageService.imageUpload(image, file);
         URI location = null;
+        image.setUrl(null);
+        List<Image> images = imageService.findByUpc(image.getProduct().getUpc());
+        image = imageService.imageUpload(image, images, file);
 
         try {
-            location = new URI("/images/" + image.getProduct().getUpc() + "/id/" + imageData.getId());
+            location = new URI("/images/" + image.getProduct().getUpc() + "/id/" + image.getId());
         } catch (URISyntaxException e) {
             e.printStackTrace();
         }
@@ -98,7 +98,8 @@ public class ImageController {
     @PutMapping("/{upc}/id/{id}")
     public ResponseEntity<?> putImageUpc(@PathVariable long upc, @PathVariable long id,
             @NotNull @RequestPart MultipartFile file, @Validated @RequestPart Image image) {
-        Optional<Image> imageOptional = imageService.findById(id);
+        List<Image> images = imageService.findByUpc(upc);
+        Optional<Image> imageOptional = images.stream().filter(i -> i.getId().equals(id)).findFirst();
 
         if (!imageOptional.isPresent()) {
             return ResponseEntity.notFound().build();
@@ -108,14 +109,20 @@ public class ImageController {
 
         imageGet.setDateModified(LocalDateTime.now());
         imageGet.setType(image.getType());
-
-        image = imageService.imageUpload(imageGet, file);
+        image = imageService.imageUpload(imageGet, images, file);
         return ResponseEntity.ok(image);
     }
 
     @DeleteMapping("/{upc}/id/{id}")
-    public ResponseEntity<?> deleteProduct(@PathVariable("id") long id) {
-        imageService.deleteById(id);
+    public ResponseEntity<?> deleteProduct(@PathVariable long upc, @PathVariable long id) {
+        List<Image> images = imageService.findByUpc(upc);
+        Optional<Image> imageOptional = images.stream().filter(i -> i.getId().equals(id)).findFirst();
+
+        if (!imageOptional.isPresent()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        imageService.delete(imageOptional.get(), images);
         return ResponseEntity.noContent().build();
     }
 
