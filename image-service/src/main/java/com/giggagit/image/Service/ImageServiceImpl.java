@@ -175,13 +175,7 @@ public class ImageServiceImpl implements ImageService {
             String oldImage = image.getUrl().substring(image.getUrl().lastIndexOf('/') + 1, image.getUrl().length());
 
             if (!imageName.equals(oldImage)) {
-                Path oldPath = Paths.get(directory + "/" + oldImage);
-
-                try {
-                    Files.delete(oldPath);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                deleteImage(image);
             }
         }
 
